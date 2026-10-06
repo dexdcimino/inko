@@ -6,10 +6,6 @@
         {
           "key": "Content-Security-Policy",
           "value": "frame-ancestors https://dexcimino.com https://www.dexcimino.com"
-        },
-        {
-          "key": "X-Frame-Options",
-          "value": "ALLOW-FROM https://dexcimino.com"
         }
       ]
     }
