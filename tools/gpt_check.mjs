@@ -1,0 +1,75 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+import { PRIVATE as P } from '../api/private.js';
+const html=readFileSync(new URL('../index.html',import.meta.url),'utf8');
+const DATA=JSON.parse(html.match(/const DATA = (\{.*\});\r?\n/)[1]);
+const ctx=vm.createContext({PRIV:P,DATA,S:{checks:{},stages:{},income:{},custom:[]},Date,
+ INCOME_SEARCH:'',INCOME_FILTER:'All',INCOME_DONE:true,INCOME_OPEN:new Set(),
+ esc:s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),chev:'',
+ check:(id,label,done,group)=>`<input type="checkbox" data-id="${id}" data-c="${group}" ${done?'checked':''}>${label}`,
+ ref:(title,body)=>`<details><summary>${title}</summary>${body}</details>`,bullets:a=>a.join(' '),h2:s=>s});
+vm.runInContext(html.slice(html.indexOf('const stageOf='),html.indexOf("let BASH_SUB='dex';")),ctx);
+vm.runInContext(html.slice(html.indexOf('function secTotals(){'),html.indexOf('function secBash(){')),ctx);
+const run=code=>vm.runInContext(code,ctx);
+let count=0;const ok=(condition,name)=>{assert(condition,name);count++;console.log('ok '+name);};
+const rows=run('gptLeads()');
+ok(rows.length===335,'all 272 previous lead IDs plus 38 backfilled application cards rendered');
+ok(new Set(rows.map(x=>x.id)).size===335,'no duplicate lead IDs');
+ok(rows.filter(x=>x.d).length>=199,'confirmed completions preserved and missing sent records checked off');
+ok(rows.every(x=>x.id in P.gpt.history),'every previous lead has a migrated default');
+for(const sub of ['dex','outreach','focused']){
+ const result=run(`GPT_SUB='${sub}';secIncome()`);
+ const boxes=(result.match(/type="checkbox"/g)||[]).length-(sub==='outreach'?1:0);
+ const expected=sub==='dex'?P.gpt.dex.length:sub==='outreach'?335+P.asap.accountSetup.length:P.gpt.focused.reduce((n,c)=>n+c.items.length,0);
+ ok(boxes===expected,sub+' renders '+boxes+' expected checkboxes');
+ ok(result.includes('data-bsub="gpt-focused"')&&!result.includes('class="seg"'),sub+' independent subtab bar');
+}
+const done=rows.find(x=>x.d),pending=rows.find(x=>!x.d);
+ctx.S.checks[done.id]=false;ctx.S.checks[pending.id]=true;
+ok(!run('gptLeads().find(x=>x.id==='+JSON.stringify(done.id)+').d')||!run('bd(gptLeads().find(x=>x.id==='+JSON.stringify(done.id)+'))'),'explicit unchecked override wins');
+ok(run('bd(gptLeads().find(x=>x.id==='+JSON.stringify(pending.id)+'))'),'explicit checked override wins');
+ctx.S.income[done.id]={status:'funded',notes:'preserved test note'};
+ok(run("GPT_SUB='outreach';secIncome()").includes('preserved test note'),'existing notes preserved');
+ok(run("secIncome()").includes('value="funded" selected'),'lead-level status preserved independently of action override');
+run("GPT_SUB='focused';GPT_CLOSED.add('focused-0')");
+ok(run('secIncome()').includes('data-gcat="focused-0"><summary>'),'category collapse survives rerender');
+ok(rows.some(x=>x.listing==='expired')&&rows.some(x=>x.listing==='pool')&&rows.some(x=>x.listing==='stale'),'expired, pool and stale states visible');
+ok(rows.find(x=>x.id==='asap-darkrp').owner==='Bash','Bash recruiting ownership preserved');
+ok(P.gpt.dex.length<=6&&!P.gpt.dex.some(x=>['dx1','dx4'].includes(x.id)),'no duplicate shared Dex prerequisites');
+const sentItems=P.gpt.focused.flatMap(c=>c.items).filter(x=>x.sentMessageId);
+ok(sentItems.length===19&&sentItems.every(x=>x.d===1),'19 Gmail-verified sends have completed action defaults');
+ok(sentItems.filter(x=>x.status==='bounced').length===1&&sentItems.find(x=>x.status==='bounced').body.includes('careers@kanha.ai'),'Kanha bounce recorded separately from sent status');
+ok(['o6','o29','o30'].every(id=>P.gpt.review[id].listing==='expired'&&P.gpt.review[id].checked==='2026-10-12'),'three employer listings closed on Oct 12');
+const packets=P.gpt.focused[0].items;
+const ready=packets.filter(x=>x.status==='ready-to-fill');
+ok(ready.length===0&&P.gpt.fillPacketAuditOct12.ready===0,'READY queue emptied by final submission/parked reconciliation');
+ok(ready.every(x=>x.d===0&&!x.body.includes('BLOCKER:')&&x.answers.some(a=>a[1].includes('Dex_Cimino_Resume.pdf'))),'ready packets unsent, unchecked, resume supplied and no unresolved facts');
+ok(packets.find(x=>x.id==='gpt-fill-vrchat-20261012').answers.find(a=>a[0].startsWith('Do you have remote work'))[1].startsWith('Yes'),'VRChat confirmed remote-work answer persisted');
+ok(P.gpt.history.o3.d===1&&P.gpt.history.r5.d===1&&P.gpt.history.o17.d===1,'three confirmed actions reconciled');
+ok(P.gpt.focused.flatMap(x=>x.items).find(x=>x.id==='gpt-sawhorse').confirmationMessageId==='1a130791d16fcb9e','Sawhorse received confirmation separate from sent count');
+ok(packets.find(x=>x.id==='gpt-fill-livekit-20261012').status==='submitted'&&packets.find(x=>x.id==='gpt-fill-livekit-20261012').d===1&&!packets.find(x=>x.id==='gpt-fill-livekit-20261012').answers,'LiveKit submitted by Dex himself Oct 13; no AI application packet retained');
+ok(packets.find(x=>x.id==='gpt-fill-hatsu-20261012').status==='submitted'&&P.gpt.history.r10.d===1,'Hatsu submitted once with received confirmation');
+ok(packets.find(x=>x.id==='gpt-fill-vrchat-20261012').status==='awaiting-dex-click'&&packets.find(x=>x.id==='gpt-fill-vrchat-20261012').d===0,'VRChat awaiting Dex click is not counted submitted');
+ok(packets.find(x=>x.id==='gpt-fill-activetheory-20261012').status==='submitted'&&packets.find(x=>x.id==='gpt-fill-activetheory-20261012').evidence.includes('No independent platform confirmation'),'Active Theory recorded as Dex-reported submission with evidence limits');
+ok(packets.find(x=>x.id==='gpt-fill-figma-20261012').answers.find(a=>a[0].startsWith('Have you ever worked for Figma'))[1].startsWith('No'),'Figma prior employment explicitly confirmed');
+ok(packets.find(x=>x.id==='gpt-fill-replit-product-20261012').status==='blocked'&&packets.find(x=>x.id==='gpt-fill-replit-product-20261012').body.includes('ZERO paid software'),'zero paid engineering years never rounded to required 1–2 bucket');
+ok(['gpt-fill-vercel-20261012','gpt-fill-bolt-20261012','gpt-fill-airship-20261012'].every(id=>packets.find(x=>x.id===id).status==='submitted'&&packets.find(x=>x.id===id).confirmationText),'confirmed platform results supersede earlier readiness');
+ok(P.gpt.standingFacts.paidSoftwareEngineeringYears===0&&P.gpt.standingFacts.hasRunOnlineCommunity===false&&P.gpt.standingFacts.previousFigmaEmployment===false,'standing facts preserve confirmed zero experience and No answers');
+ok(packets.find(x=>x.id==='gpt-fill-illfonic-20261012').status==='submitted','Bash IllFonic confirmation prevents duplicate filling');
+ok(ready.every(x=>x.body.includes('Priority: '+x.priority)),'displayed priority matches packet order');
+ok(P.gpt.standingFacts.discordUsername==='dex_ddc'&&P.gpt.standingFacts.phoneticName==='DEX sih-MEE-noh'&&P.gpt.standingFacts.hasMayaUnityAutomationExample===false,'standing blocker facts preserved without invented automation');
+ok(packets.find(x=>x.id==='gpt-fill-hardsuit-20261012').status==='blocked'&&packets.find(x=>x.id==='gpt-fill-hardsuit-20261012').body.includes('Leave unselected'),'salary acceptance never inferred from availability');
+ok(packets.find(x=>x.id==='gpt-fill-voodoo-20261012').status==='blocked'&&packets.find(x=>x.id==='gpt-fill-voodoo-20261012').body.includes('six-month full-time commitment is not confirmed'),'six-month commitment remains unresolved');
+ok(['gpt-fill-runway-growth-20261012','gpt-fill-tgc-general-20261012'].every(id=>packets.find(x=>x.id===id).status==='closed'),'same-company secondary roles closed after primary submissions');
+ok(packets.find(x=>x.id==='gpt-fill-figma-20261012').status==='submitted'&&packets.find(x=>x.id==='gpt-fill-figma-20261012').confirmationText==='Thank you for applying','new Figma confirmation replaces earlier pending code');
+ok(P.gpt.executionPause.newPackets===false&&P.gpt.executionPause.newResearch===false,'Dex stopping-point order persists for future turns');
+const audit=P.gpt.outboundAudit;
+ok(audit.gpt.cold===158&&audit.gpt.focused===39&&audit.gpt.applicationEmails===18,'GPT email channels reconcile to 215 unique authored sends');
+ok(audit.gpt.executedEmails===196&&audit.gpt.authoredEmailsSentByOthers===19,'authorship and actual sender stay separate');
+ok(new Set(audit.emailRecords.map(x=>x.messageId)).size===audit.emailRecords.length&&audit.emailRecords.length===528,'shared work-email register contains unique Gmail Sent IDs only');
+ok(audit.formRecords.length===191&&audit.formRecords.every(x=>x.executedBy!=='GPT'),'GPT-prepared form applications credited to actual submitters');
+const totalsBefore=run('secTotals()');ctx.S.checks['not-a-send']=true;
+ok(run('secTotals()')===totalsBefore,'checking a task never changes sent totals');
+ok(P.gpt.focused.filter(x=>/^Verified (posting )?closures/i.test(x.g)).length===1,'duplicate closure sections consolidated without deleting records');
+console.log(`${count} GPT migration/render checks passed`);
